@@ -29,10 +29,15 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "pico/binary_info.h"
+#include "hardware/pio.h"
 #include "midi_uart_lib.h"
 #include "bsp/board_api.h"
 #include "tusb.h"
 #include "usb_midi_host.h"
+
+#include "pico/util/queue.h"
+#include "uart_rx.pio.h"
+
 // On-board LED mapping. If no LED, set to NO_LED_GPIO
 const uint NO_LED_GPIO = 255;
 const uint LED_GPIO = 25;
@@ -51,8 +56,29 @@ const uint LED_GPIO = 25;
 #define MIDI_UART_RX_GPIO 5
 #endif
 
+
+// PIO is used as UART to receive MIDI messages
+// 2 PIO RX pins are defined here.
+// The first is for PC serial connection (baud 115200)
+// Tha last is for MIDI-IN DIN connector (baud 31250)
+//
+// based on pico-examples: : https://github.com/raspberrypi/pico-examples/blob/master/pio/uart_rx/
+
+#define PIO_RX_PC_PIN 14
+#define PIO_RX_MIDI_PIN 15
+
+#define SERIAL_BAUD_PC 115200
+#define SERIAL_BAUD_MIDI 31250
+
+#define FIFO_RX_SIZE 64
+
+static queue_t fifo_pc;
+static queue_t fifo_midi;
+
+
 static void *midi_uart_instance;
 static uint8_t midi_dev_addr = 0;
+
 
 static void blink_led(void)
 {
@@ -103,6 +129,17 @@ int main() {
     gpio_set_dir(LED_GPIO, GPIO_OUT);
     midi_uart_instance = midi_uart_configure(MIDI_UART_NUM, MIDI_UART_TX_GPIO, MIDI_UART_RX_GPIO);
     printf("Configured MIDI UART %u for 31250 baud\r\n", MIDI_UART_NUM);
+
+
+    // PIO Serial Initialization
+    // Set up the state machine we're going to use to receive data.
+    PIO pio_pc = pio0;
+    uint sm = 0;
+    uint offset = pio_add_program(pio_pc, &uart_rx_program);
+    uart_rx_program_init(pio_pc, sm, offset, PIO_RX_PC_PIN, SERIAL_BAUD_PC);
+    queue_init(&fifo_pc, 1, FIFO_RX_SIZE);
+    queue_init(&fifo_midi, 1, FIFO_RX_SIZE);
+
     while (1) {
         tuh_task();
 
@@ -113,6 +150,52 @@ int main() {
         if (connected)
             tuh_midi_stream_flush(midi_dev_addr);
         midi_uart_drain_tx_buffer(midi_uart_instance);
+
+
+
+        // Read from PIO serial PC
+
+        uint8_t rx[FIFO_RX_SIZE] = {0x00};
+        uint8_t rx_len = 0;
+        while(!pio_sm_is_rx_fifo_empty(pio_pc, sm)) {
+            char c = uart_rx_program_getc(pio_pc, sm);
+            if (rx_len >= sizeof(rx)) {
+                panic("fifo PC full");
+            }
+            rx[rx_len] = c;
+            rx_len++;
+            //TODO: use buffer or fifo???
+
+            // if (!queue_try_add(&fifo_pc, &c)) {
+            //     panic("fifo PC full");
+            // }
+        }
+
+        // Write fifo to USB
+        if (rx_len > 0) {
+            uint8_t npushed = midi_uart_write_tx_buffer(midi_uart_instance,rx,rx_len);
+            if (npushed != rx_len) {
+                TU_LOG1("Warning: Dropped %lu bytes sending to UART MIDI Out\r\n", rx_len - npushed);
+            }
+
+            // print to console for debug
+            for (uint8_t i=0; i<rx_len; i++) {
+                putchar(rx[i]);
+            }
+        }
+        
+        //TODO: use buffer or fifo???
+        // while(!queue_is_empty(&fifo_pc)) {
+        //     if (connected && tuh_midih_get_num_tx_cables(midi_dev_addr) >= 1) {
+        //         char c;
+        //         if (!queue_try_remove(&fifo, &c)) {
+        //             panic("fifo empty");
+        //         }
+        //         putchar(c); // Display character in the console
+
+        //     }
+        // }
+
     }
 }
 
@@ -177,4 +260,10 @@ void tuh_midi_rx_cb(uint8_t dev_addr, uint32_t num_packets)
 void tuh_midi_tx_cb(uint8_t dev_addr)
 {
     (void)dev_addr;
+}
+
+
+
+void receive_data(){
+    uint8_t rx[FIFO_RX_SIZE] = {0x00};
 }

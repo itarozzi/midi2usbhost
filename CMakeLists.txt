@@ -15,6 +15,9 @@ add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/usb_midi_host)
 add_executable(${target_proj}
     midi2usbhost.c
 )
+
+pico_generate_pio_header(${target_proj} ${CMAKE_CURRENT_LIST_DIR}/uart_rx.pio)
+
 if(DEFINED ENV{MIDI_UART_NUM})
     set(MIDI_UART_NUM $ENV{MIDI_UART_NUM})
 endif()
@@ -48,7 +51,7 @@ target_include_directories(${target_proj} PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 
 target_link_options(${target_proj} PRIVATE -Xlinker --print-memory-usage)
 target_compile_options(${target_proj} PRIVATE -Wall -Wextra -DCFG_TUSB_DEBUG=1)
-target_link_libraries(${target_proj} midi_uart_lib tinyusb_host tinyusb_board ring_buffer_lib pico_stdlib usb_midi_host_app_driver)
+target_link_libraries(${target_proj} hardware_pio midi_uart_lib tinyusb_host tinyusb_board ring_buffer_lib pico_stdlib usb_midi_host_app_driver)
 
 pico_add_extra_outputs(${target_proj})
 
